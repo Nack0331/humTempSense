@@ -1,70 +1,159 @@
 /*****************************************************************************
+ *  温度・湿度モニター
  * 
- * Arduino: 温湿度計測・通知モジュール
+ * センサーから取得した温度・湿度を2ライン液晶ディスプレイに表示する
  * 
- * ---------------------------------------------------------------------------
- * 機能 
- *   センサーで温度・湿度を計測
- *   計測は3秒間隔で実施
- *   センサーはDHT11を使用
- *   センサーはPin8に接続
- *   前回計測値に対し一定量以上の変化があった場合はシリアル通信で計測値を送信
- *   シリアル通信のボーレートは9600
- *     書式1. 湿度: "H," + 計測値 + [\n]
- *     書式2. 温度: "T," + 計測値 + [\n] 
-******************************************************************************/
+ * 
+ * 稼働デバイス
+ * - Arduino Uno
+ * 
+ * モジュール類
+ * - センサー: DHT11 相当品
+ * - 液晶ディスプレイ: 1602A LCD 相当品
+ * 
+ * 使用ライブラリー
+ * - I2C LCD 制御: LiquidCrystal_I2C
+ *                 https://www.arduino.cc/reference/en/libraries/liquidcrystal-i2c/
+ *                 https://github.com/johnrickman/LiquidCrystal_I2C.git
+ * - センサー制御: DHT sensor library
+ *                 https://www.arduino.cc/reference/en/libraries/dht-sensor-library/
+ *                 https://github.com/adafruit/DHT-sensor-library
+ * 
+ * 備考
+ * - 各モジュールの接続等は Fritzing デザイン図を参照のこと
+ *****************************************************************************/
 
-#include "DHT.h"
+#include <LiquidCrystal_I2C.h>
+#include <DHT.h>
 
-#define DATA_PIN 8
-#define BAUDRATE 9600
-#define VL_HUM "H,"
-#define VL_TMP "T,"
+// センサーのデータはデジタルピン12から入力する
+#define DHT_PIN 12
 
-DHT dht(DATA_PIN, DHT11);
-float lastHumidity = 0.0;
-float lastTemperature = 0.0;
+// LCDタイプ
+#define LCD_TYPE 0x3f
+// LCD 1行あたりの文字数
+#define LCD_CHAR_COUNT 16
+// LCD 行数
+#define LCD_LINE_COUNT 2
 
-void setup() {
-  // シリアル通信, センサー動作開始
-  Serial.begin(BAUDRATE);
+// センサーを接続するピンの番号, 使用するセンサーモジュールの種類を指定する
+DHT dht(DHT_PIN, DHT11);
+
+// 使用するLCDのアドレス, 1行あたりの文字数(列数), 行数を指定する
+LiquidCrystal_I2C lcd(LCD_TYPE, LCD_CHAR_COUNT, LCD_LINE_COUNT);
+
+/*********************************************************
+ * initSensor
+ * - センサーを初期化する
+ *********************************************************/
+void initSensor()
+{
+  // センサー使用開始
   dht.begin();
 }
 
-void loop() {
-  // 一定時間 (3秒) ごとに処理を行う
+/*********************************************************
+ * initLCD
+ * - LCDを初期化する
+ *********************************************************/
+void initLCD()
+{
+  // デバイス初期化
+  lcd.init();
+  // バックライト: ON
+  lcd.backlight();
+}
+
+/*********************************************************
+ * readSenseValue
+ * - センサーから値を取得・返却する
+ * - 引数
+ * - - tmpValue: 温度値返却用
+ * - - humValue: 湿度値返却用
+ * - 戻り値
+ * - - true: 処理成功
+ * - - false: 処理失敗
+ *********************************************************/
+bool readSenseValue(float *tmpValue, float *humValue)
+{
+  // センサーから温度を取得
+  *tmpValue = dht.readTemperature();
+
+  // センサーから湿度を取得
+  *humValue = dht.readHumidity();
+
+  // 戻り値: 2つの値が適切に取得できたかどうか
+  // いずれか一方, または両方の値取得に失敗した場合は false
+  return ((!isnan(*tmpValue)) && (!isnan(*humValue)));
+}
+
+/*********************************************************
+ * showLCD
+ * - LCDの各行に指定された表示する
+ * - 引数
+ * - - line1Value: 1行目用文字列
+ * - - line2Value: 2行目用文字列
+ *********************************************************/
+void showLCD(String line1Value, String line2Value)
+{
+  // 現在の表示を一旦クリア
+  lcd.clear();
+
+  // 1行目: 表示位置オフセット
+  lcd.setCursor(0, 0);
+  // 値表示
+  lcd.print(line1Value);
+
+  // 2行目: 表示位置オフセット
+  lcd.setCursor(0, 1);
+  // 値表示
+  lcd.print(line2Value);
+}
+
+/*********************************************************
+ * showValue
+ * - センサーから取得した値をLCDに表示する
+ * - 引数
+ * - - tmpValue: 温度値
+ * - - humValue: 湿度値
+ *********************************************************/
+void showSenseValue(float tmpValue, float humValue)
+{
+  // 取得した温度・湿度を文字列に変換し, 付加情報を添えてLCDに表示
+  showLCD("Tmp: " + String(tmpValue, 1) + " C", "Hum: " + String(humValue, 1) + " %");
+}
+
+/*********************************************************
+ * setup
+ *********************************************************/
+void setup()
+{
+  // センサーモジュール初期化
+  initSensor();
+
+  // LCD初期化
+  initLCD();
+
+  // LCDに起動時メッセージを表示する
+  showLCD("Device started!", "Please for wait.");
+}
+
+/*********************************************************
+ * loop
+ *********************************************************/
+void loop()
+{
+  // センサーの応答速度 (最速2秒) を考慮し, 毎回3秒のディレイを行う
   delay(3000);
 
-  // 温湿度を計測
-  float h = dht.readHumidity();
-  float t = dht.readTemperature();
-
   // 適切な値が取得できなかった場合は処理中断
-  if (isnanf(h) || isnanf(t)) {
+  float tmpVl = 0.0;
+  float humVl = 0.0;
+  if (!readSenseValue(&tmpVl, &humVl))
+  {
     return;
   }
 
-  // 湿度
-  // 前回の計測値から一定以上の変化があった場合はシリアル通信で通知
-  if (abs(lastHumidity - h) > 1.0) {
-    // 前回計測値を保持
-    lastHumidity = h;
-
-    // シリアルコマンド送信
-    Serial.print(VL_HUM);
-    Serial.print(h);
-    Serial.print('\n');
-  }
-
-  // 温度
-  // 前回の計測値から一定以上の変化があった場合はシリアル通信で通知
-  if (abs(lastTemperature - t) > 1.0) {
-    // 前回計測値を保持
-    lastTemperature = t;
-
-    // シリアルコマンド送信
-    Serial.print(VL_TMP);
-    Serial.print(t);
-    Serial.print('\n');
-  }
+  // 取得した値をLCDに表示
+  showSenseValue(tmpVl, humVl);
 }
